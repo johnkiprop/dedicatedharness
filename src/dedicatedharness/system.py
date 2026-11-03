@@ -116,7 +116,10 @@ def load_config(home: Path) -> dict[str, Any]:
     path = home / "config.json"
     if not path.exists():
         raise HarnessError("No configuration. Run 'dh setup' or 'dh connect' first.")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    return validate_config(json.loads(path.read_text(encoding="utf-8")), path)
+
+
+def validate_config(value: Any, path: Path | str = "saved profile") -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") != 1:
         raise HarnessError(f"Unsupported configuration: {path}")
     required = ("backend", "base_url", "model", "context_tokens", "max_output")
@@ -158,7 +161,9 @@ def write_json(path: Path, value: Any, *, overwrite: bool = False) -> None:
 
 
 def save_config(home: Path, value: dict[str, Any]) -> None:
-    write_json(home / "config.json", value, overwrite=True)
+    from .activity import activity_lock
+    with activity_lock(home):
+        write_json(home / "config.json", value, overwrite=True)
 
 
 def as_json(value: Any) -> str:

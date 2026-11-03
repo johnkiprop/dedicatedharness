@@ -49,6 +49,17 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Exercise installed CLI
         run: dh doctor
+      - name: Install pinned OpenCode for local protocol integration
+        if: matrix.python == '3.11' && matrix.os != 'windows-latest'
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/dh-opencode" --no-audit --no-fund opencode-ai@1.19.4
+      - name: Verify native OpenCode with a fake loopback model
+        if: matrix.python == '3.11' && matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cd tests
+          DEDICATEDHARNESS_TEST_OPENCODE="$RUNNER_TEMP/dh-opencode/node_modules/.bin/opencode" \
+            python -m unittest test_supervisor.NativeEngineTests -v
 
   package:
     name: Build wheel

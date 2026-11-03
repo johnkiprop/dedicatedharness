@@ -2,11 +2,17 @@
 
 [![CI](https://github.com/johnkiprop/dedicatedharness/actions/workflows/ci.yml/badge.svg)](https://github.com/johnkiprop/dedicatedharness/actions/workflows/ci.yml)
 
-A local-only companion for Mac engineers using OpenCode, OpenClaw, and
+A local-first model manager and coding supervisor for Mac engineers using OpenCode, OpenClaw, and
 LM Studio. Discover and budget Hugging Face models, prepare isolated MLX,
 write focused prompts, retain compact project checkpoints, measure latency, and
-export reviewed agent configuration and task handoffs.
-It is **not another autonomous coding agent**.
+export reviewed agent configuration and task handoffs. `dh run` supervises an
+existing OpenCode engine with scoped file tools, bounded inference, independent
+checks, and limited repairs. It does not rebuild OpenCode or launch a swarm.
+OpenClaw integration remains provider exports and handoffs, not a supervised adapter.
+
+Start with the [user guide](docs/USER_GUIDE.md), also available as a
+[Word document](docs/USER_GUIDE.docx). It covers Mac setup, daily project work,
+quality checks, supervised coding, saved-model rollback, and troubleshooting.
 
 See [RESEARCH.md](RESEARCH.md) for the dated research, model caveats, architecture
 recommendations, and primary sources. Start with one bounded worker, not a swarm.
@@ -393,18 +399,108 @@ Pending first trials remain in the denominator and prevent target qualification.
 The report includes a Wilson 95% interval: observing 95/100 passes does not mean
 the true success rate is at least 95% with 95% confidence.
 
-This is **not independently observed model-generation pass@1**. OpenCode/OpenClaw
-may retry internally, use another provider, or override settings. The harness
-cannot observe those actions or certify held-out independence, grader completeness,
-training-data contamination, or industry-model equivalence. Match the declared
-model/settings in your execution agent; exported provider fragments do not force
-its sampling parameters. Human code review and good tests remain necessary.
+This is **not model-generation pass@1**. Ordinary external OpenCode/OpenClaw
+sessions can retry or override settings without observation. `dh run` instead
+observes its owned engine sessions and routes every model request through its
+bounded local gateway. These execution profiles are accounted separately.
+Neither mode certifies held-out independence, grader completeness,
+training-data contamination, or industry-model equivalence. Provider exports do
+not force an ordinary external agent's settings. Human review remains necessary.
 
 `quality profile` changes inference settings used by `ask`, `bench`, and the
 tool probe, and clears tool verification. It does not update model weights,
 automatically search parameters, learn from private histories, or guarantee a
 reproducible result. No fine-tuning, training-data collection, or automatic
 weight training is implemented.
+
+## Supervised coding on your Mac
+
+Install **OpenCode 1.x** separately if needed; this adapter is validated against
+1.19.4, not OpenCode 2. Keep the selected MLX or LM Studio server running.
+For managed coding experiments, consider an 8,192-token context and 1,024-token
+output budget instead of the smaller chat defaults; setup rechecks hardware fit.
+External-server admission is a conservative byte estimate and may need a larger
+declared/server context. Larger contexts cost memory and prefill time.
+
+From an initialized Git checkout root, enable verified quality, register trusted
+commands with `--protect`, and approve a task using the workflow above. Then use
+this **instead of** the external implementation handoff and manual bookkeeping.
+Replace these example paths with your approved source and a new regression test:
+
+```sh
+dh check-tools
+dh run --allow-edit src/auth.py --allow-edit tests/test_auth_expiry_new.py
+dh runs
+```
+
+The CLI starts its own authenticated loopback OpenCode server with separate
+home/config/data/cache directories. Project/global OpenCode configuration,
+plugins, external skills, MCP, LSP/formatters, sharing, and hosted providers are
+disabled; resolved configuration and provider identity are checked before a
+prompt. File-tool arguments are checked again by the harness. Shell commands,
+web tools, subagents, edits outside the explicit paths, and edits to protected
+graders are refused. This is **runtime policy, not an OS sandbox**: approved
+checks execute project code, and concurrent writers can still cause drift.
+
+One worker uses just-in-time source reads and search, not a repository dump.
+A local inference gateway pins the model and sampling, serializes generation,
+checks the actual messages/tool schemas against the context budget, visibly
+compacts long/old tool results, and bounds aggregate admission. It never
+silently removes the task or sends an over-budget prompt. Defaults are six
+agent steps per turn, at most one repair, sixteen model requests, 600 seconds,
+and an aggregate budget of 32,768 units for MLX or 131,072 for external servers.
+This adds admitted input units and reserved output tokens. External input units
+are estimated bytes, **not measured tokens**, so budgets are not directly
+comparable between backends. Override with `--budget`. Cleanup can add time
+after a deadline; an earlier budget or no-progress failure stops repairs.
+
+Completion requires an observed terminal/idle engine session, Git-observed
+changes, unchanged protected graders, and every required independent check
+passing on the current fingerprint. The engine is stopped before final
+acceptance. Text saying "done" is not evidence. Unregistered device checks stay
+pending; emulator success cannot fabricate phone validation. Failed edits are
+retained for review, never automatically reverted.
+
+```sh
+dh runs --id RUN_ID
+dh run --resume RUN_ID
+```
+
+Resume uses compact task/check evidence and a fresh engine session. Repeat
+the original nondefault scope/limit flags; model, engine version, limits,
+approval, graders, task revision and Git fingerprint must still match. Consumed
+budgets are not reset, and an exhausted run cannot be resumed. Model-changing
+commands are locked out during a run.
+
+Default persistence is compact operational metadata and bounded check-output
+tails, which may contain project data. Raw OpenCode state is deleted after the
+owned engine stops; `--keep-trace` explicitly retains source/prompts/transcripts
+in the private harness home. Existing LM Studio/server logging is separate.
+Supervised evaluation trials include actual engine version, harness checksum,
+and limits; they are not pooled with declared external-agent profiles.
+
+### Save, evaluate, and restore model profiles
+
+```sh
+dh profile save coding-stable
+# Stop dh serve before staging or switching managed models.
+dh upgrade --purpose coding --stage --profile coding-candidate
+dh profile use coding-candidate
+dh serve
+# In another terminal: dh check-tools, then evaluate the candidate.
+# Stop dh serve before restoring the old model:
+dh profile use coding-stable
+dh profile list
+```
+
+Named profiles retain pinned snapshots and sampling/context/runtime details.
+Activation rechecks current hardware, owned cache contents, runtime version,
+and offline generation, then clears tool verification. Cached restore does not
+need Hub access or a second full download's disk budget. External profiles
+verify that their exact model ID is exposed; they cannot attest which weights
+an external application actually serves. Existing names are not overwritten.
+Upgrade cleanup preserves every revision referenced by a saved profile.
+An explicit candidate switch is permission to evaluate, **not evidence of superiority**.
 
 ## Verify tools, then export
 
@@ -480,8 +576,9 @@ are surfaced rather than silently replaced with a stale recommendation.
 
 This first version intentionally has no LangGraph dependency, automatic swarm,
 cloud inference, semantic repository indexing, or model-generated command executor.
-Only explicitly registered validation commands are executed. Existing agents
-remain responsible for code changes and their own execution permissions.
+Only explicitly registered validation commands are executed by the supervisor;
+the model cannot invent shell commands. Ordinary exported-agent sessions retain
+their own permissions; the owned `dh run` engine uses the restricted policy above.
 
 ## Development
 
@@ -491,7 +588,10 @@ portable regression suite, checks dependencies/compilation, and exercises the
 installed CLI. A wheel is built only after all test jobs pass and retained as
 an Actions artifact for seven days; nothing is published to PyPI automatically.
 Actions are pinned to immutable commits with read-only repository permissions.
-CI does not download model weights or validate real MLX/Metal performance.
+Linux/macOS Python 3.11 jobs also install OpenCode 1.19.4 and exercise its real
+file tools against a fake loopback model, including permission refusal and
+project-configuration isolation. CI does not download weights or validate real
+MLX/Metal performance.
 
 From the project directory:
 
@@ -506,7 +606,9 @@ roundtrips, no-send budget rejection, pinned downloads, memory screening,
 project/task persistence, approval and evidence invalidation, bounded handoffs,
 opt-in follow-up continuity, configuration persistence, provider exports,
 real temporary Git repositories, executable quality gates, first-submission
-accounting, and staged/failed/measured model-upgrade paths.
-Actual MLX/Metal execution,
-M5 latency, and real OpenCode/OpenClaw integration must be exercised on the
-Mac; Windows tests do not establish those outcomes.
+accounting, supervised repairs/no-progress/deadlines, immutable execution
+provenance, process-wide model locks, offline saved-profile restoration, and
+staged/failed/measured model-upgrade paths. Native OpenCode protocol/file-tool
+integration has also been exercised on Windows with a fake local model.
+Actual MLX/Metal execution, M5 latency, local-model coding quality, and OpenClaw
+session execution remain unverified; fake-model integration does not prove them.

@@ -7,8 +7,8 @@ have not yet been verified.
 
 ## Recommendation
 
-Build a small, local-first companion CLI for existing coding agents. Do not
-start by building a replacement for OpenCode, OpenClaw, or LangGraph.
+Build a small, local-first supervisor around existing coding agents. Do not
+rebuild OpenCode, OpenClaw, or add LangGraph just for its branding.
 
 Its useful differentiation should be:
 
@@ -23,8 +23,9 @@ Its useful differentiation should be:
 The implementation now also provides private per-checkout project/task state:
 compact checkpoints, explicit scope approval, separate required validation
 records, optional latest-exchange continuity, and bounded OpenCode/OpenClaw
-handoff prompts. These records are user-maintained; they are not independent
-proof that code was edited, checks were run, or a build was deployed.
+handoff prompts. Plans and narrative checkpoints are user-maintained. Executed quality runs and
+owned OpenCode sessions now add independent process/Git/check observations;
+neither claims that an application was deployed or tested on a device.
 See the README's personal-project workflow for commands and limits.
 
 Keep all inference local by default. Access to Hugging Face for discovery
@@ -232,8 +233,9 @@ Suggested command surfaces:
 
 Reuse a configured LM Studio or other local endpoint for a low-friction
 starting path. Offer managed MLX separately on Apple Silicon.
-Do not run generated shell commands or modify source files autonomously in
-the first version; let the existing coding agents own execution permissions.
+The original manager/handoff boundary did not execute agent sessions.
+The supervised implementation below now owns restricted OpenCode sessions,
+but still does not execute model-generated shell strings.
 
 Bind managed servers to loopback. Avoid prompt logging by default. Store
 only operational metadata and opt-in benchmark results. Do not enable
@@ -250,7 +252,8 @@ The companion now fingerprints Git state on task access, offers explicit
 path-based context suggestions, and can execute user-approved validation
 commands bound to repository snapshots and protected graders. Compact task
 state and explicit context remain preferable to replaying entire transcripts.
-This is not semantic retrieval, autonomous source editing, or a sandbox.
+These suggestions are not semantic retrieval. Supervised source editing now
+uses the restricted engine described below; neither workflow is an OS sandbox.
 
 Following agent-evaluation guidance, reliability is measured through real
 protected checks, not self-reported model confidence. The selected target is
@@ -281,7 +284,72 @@ https://huggingface.co/docs/huggingface_hub/guides/manage-cache
 
 Windows validation does not establish actual M5 model quality, loadability,
 Metal behavior, or speed. The CLI enforces Mac load/generation verification at
-installation; real coding trials and agent integration still need that hardware.
+installation; real model-backed coding trials still need that hardware.
+
+## Frontier harness patterns adapted to this Mac
+
+The approved direction is a bounded execution supervisor, not more model-picker
+convenience or an automatic multi-agent graph. The implementation reuses OpenCode
+1.x's real sessions, tools and runtime permissions. A separate local gateway
+observes every model request, pins local routing/settings, admits actual
+messages/tool schemas, limits aggregate work and compacts old/long tool results.
+The task and tool-call relationships are preserved; omission is explicit.
+
+This follows the architectural guidance, not a claim that small local models
+inherit a frontier model's capability:
+
+1. **Own the execution boundary.** Codex app-server and coding-agent SDKs expose
+   sessions, turns, structured tool events and cancellation. The harness uses
+   OpenCode REST sessions with observed tool/message/idle state instead of
+   inferring completion from prose:
+   https://developers.openai.com/codex/app-server/
+   https://opencode.ai/docs/server/
+2. **Minimize context and tools.** Just-in-time paths/search/read ranges, a short
+   stable engineering contract and deterministic tool-output compaction replace
+   repository dumps. No semantic-index or universal cache-efficiency claim:
+   https://www.anthropic.com/research/effective-context-engineering-for-ai-agents
+   https://www.anthropic.com/research/advanced-tool-use
+3. **Persist verified continuation, not a growing transcript.** Approved scope,
+   Git fingerprints, bounded diagnostics and model/harness provenance survive
+   between sessions. Resume creates a fresh session and rejects drift; raw
+   engine traces are opt-in and separate:
+   https://www.anthropic.com/research/effective-harnesses-for-long-running-agents
+4. **Evaluate the actual environment.** Trusted commands and protected graders
+   run independently after terminal engine state; the engine is stopped before
+   final acceptance. Repairs cannot overwrite first-submission failures.
+   Supervised profiles include engine version, limits and a harness checksum,
+   and do not mix with declared manual-agent profiles:
+   https://www.anthropic.com/research/demystifying-evals-for-ai-agents
+   https://claude.dev/blog/automating-eval-design-and-hillclimbing/
+5. **Use runtime policy, not prompt-only promises.** The worker cannot invoke
+   shell/network/subagent tools, use another provider, edit protected graders,
+   or widen approved paths. Configuration is isolated and checked before any
+   prompt. This is not an OS sandbox; registered commands execute project code:
+   https://opencode.ai/docs/permissions/
+   https://geminicli.com/docs/reference/policy-engine/
+6. **Keep orchestration proportional.** One local worker plus bounded repairs is
+   the laptop default. Multi-agent orchestration and extra evaluator models
+   increase tokens, latency and resident memory; add them only after measured
+   benefit rather than copying a frontier-lab scaffold:
+   https://claude.dev/blog/a-harness-for-every-task-dynamic-workflows-in-claude-code/
+   https://www.anthropic.com/research/harness-design-long-running-apps
+
+Named profiles retain working snapshots while current compatible candidates
+are staged and explicitly evaluated. Activation rechecks actual Mac memory,
+runtime and offline generation before switching, clears tool verification,
+and does not load beside an existing managed listener. Cached restore is
+offline. Automatic promotion still requires matching held-out evidence;
+supervised comparisons additionally require identical execution provenance,
+the current harness checksum and the same installed engine version.
+Unknown architectures are not guessed into eligibility just because they are
+new. There is no background model updater or automatic weight training.
+
+OpenCode 1.19.4 was installed in isolated development tooling and exercised on
+Windows against a fake loopback model: real source reads/writes, independent
+grading, protected-path refusal, and configuration isolation. This establishes
+the adapter protocol, not M5/Metal performance, real-model coding quality, a
+95% reliability result, or OpenClaw session supervision. The same fake-model
+engine checks are wired into Linux/macOS CI.
 
 ## Primary sources
 

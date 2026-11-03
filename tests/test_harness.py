@@ -361,7 +361,7 @@ class SystemTests(unittest.TestCase):
             self.assertEqual(config["revision"], "a" * 40)
             self.assertFalse(config["tools_verified"])
             self.assertEqual(config["context_tokens"], 4096)
-            self.assertEqual(list(home.iterdir()), [home / "config.json"])
+            self.assertEqual(set(home.iterdir()), {home / "config.json", home / "activity.lock"})
 
     def test_managed_serve_verifies_inference_and_cleans_up_its_child(self):
         help_text = (

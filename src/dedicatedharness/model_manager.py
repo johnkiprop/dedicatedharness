@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from .local import local_url
 from .models import Candidate
-from .quality import execute, profile, report
+from .quality import execute, harness_digest, profile, report
 from .projects import ProjectStore
 from .system import HarnessError, load_config, write_json
 
@@ -113,6 +113,9 @@ def cleanup_previous(home: Path, old: dict[str, Any], new: dict[str, Any]) -> st
     owned = inventory(home)
     if old_key == new_key or old_key not in owned:
         return "Previous model retained (same revision or not recorded as harness-owned)."
+    from .profiles import references
+    if (old.get("repo"), old.get("revision")) in references(home):
+        return "Previous revision retained because a saved profile references it."
     entry = owned[old_key]
     if not Path(entry["snapshot"]).resolve().is_relative_to((home / "hub").resolve()):
         raise HarnessError("Cleanup refused: ownership path is outside the dedicated cache.")
@@ -141,6 +144,19 @@ def upgrade_allowed(
     after = replacement["profile"]["configuration"]
     active = profile(current)["configuration"]
     comparable = ("backend", "runtime_version", "context_tokens", "max_output", "sampling", "contract")
+    execution = before.get("execution")
+    if execution != after.get("execution"):
+        return False
+    if execution is not None:
+        if execution.get("harness_digest") != harness_digest():
+            return False
+        binary = Path(execution.get("engine_binary", ""))
+        if not binary.is_file():
+            return False
+        version = execute([str(binary), "--version"], binary.parent, 10)
+        if (version["exit_code"] or version["timed_out"] or version["output_limited"]
+                or version["output_tail"].strip() != execution.get("engine_version")):
+            return False
     return bool(
         replacement["target_observed"]
         and previous.get("case_ids") == replacement.get("case_ids")

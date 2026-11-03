@@ -34,13 +34,53 @@ def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-def profile(config: dict[str, Any]) -> dict[str, Any]:
+def harness_digest() -> str:
+    directory = Path(__file__).parent
+    return digest({
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(directory.glob("*.py"))
+    })
+
+
+def profile(config: dict[str, Any], execution: dict[str, Any] | None = None) -> dict[str, Any]:
     data = {key: config.get(key) for key in (
         "backend", "model", "repo", "revision", "runtime_version", "base_url",
         "context_tokens", "max_output", "sampling",
     )}
     data["contract"] = CONTRACT_VERSION
+    if execution is not None:
+        data["execution"] = execution
     return {"id": digest(data), "configuration": data}
+
+
+def bind_execution(
+    store: ProjectStore, task_id: str, config: dict[str, Any], execution: dict[str, Any], run_id: str,
+) -> None:
+    with store.connection() as database:
+        task = store.selected(database, task_id)
+        if not task.trial_id:
+            return
+        row = database.execute("SELECT document FROM quality_trials WHERE id = ?", (task.trial_id,)).fetchone()
+        if not row:
+            raise HarnessError("Missing evaluation trial.")
+        trial = json.loads(row[0])
+        existing = trial["profile"]["configuration"].get("execution")
+        if existing is not None:
+            if existing != execution:
+                raise HarnessError("Trial execution harness changed; start a fresh evaluation trial.")
+            if trial["status"] == "pending" and trial.get("execution_run_id") != run_id:
+                raise HarnessError("Continue the original supervised trial run; do not reset its attempt budget.")
+        elif trial["status"] != "pending" or trial["first_fingerprint"] or trial["results"]:
+            raise HarnessError("Cannot relabel an already submitted external trial as supervised.")
+        if profile(config)["id"] != profile({
+            key: value for key, value in trial["profile"]["configuration"].items()
+            if key not in ("execution", "contract")
+        })["id"]:
+            raise HarnessError("Trial model configuration differs from the supervised run.")
+        trial["profile"] = profile(config, execution)
+        trial.setdefault("execution_run_id", run_id)
+        database.execute("UPDATE quality_trials SET document = ? WHERE id = ?",
+                         (json.dumps(trial), task.trial_id))
 
 
 def enabled(database: sqlite3.Connection) -> bool:
@@ -170,7 +210,7 @@ def stop_owned_process(process: subprocess.Popen) -> None:
     process.wait(timeout=15)
 
 
-def execute(argv: list[str], root: Path, timeout: int) -> dict[str, Any]:
+def execute(argv: list[str], root: Path, timeout: int | float) -> dict[str, Any]:
     start = time.monotonic()
     timed_out = False
     output_limited = False
@@ -204,7 +244,22 @@ def execute(argv: list[str], root: Path, timeout: int) -> dict[str, Any]:
     }
 
 
-def run_check(store: ProjectStore, name: str, task_id: str | None) -> dict[str, Any]:
+def verify_graders(root: Path, command: dict[str, Any]) -> None:
+    changed = [
+        path for path, expected in command["protected"].items()
+        if not (root / path).is_file()
+        or (root / path).is_symlink()
+        or (root / path).stat().st_size > 1024 * 1024
+        or hashlib.sha256((root / path).read_bytes()).hexdigest() != expected
+    ]
+    if changed:
+        raise HarnessError("Trusted graders changed; review and explicitly reapprove the command/test baseline.")
+
+
+def run_check(
+    store: ProjectStore, name: str, task_id: str | None, *, timeout_limit: float | None = None,
+    execution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     _, task = store.snapshot(task_id)
     if task.phase != "validate" or not task.approval_scope or name not in task.checks:
         raise HarnessError("Select an approved task in validation with this required check.")
@@ -217,20 +272,19 @@ def run_check(store: ProjectStore, name: str, task_id: str | None) -> dict[str, 
         trial_row = database.execute(
             "SELECT document FROM quality_trials WHERE id = ?", (task.trial_id,)
         ).fetchone() if task.trial_id else None
-    if trial_row and json.loads(trial_row[0])["profile"]["id"] != profile(load_config(store.home))["id"]:
-        raise HarnessError("Model/prompt profile changed during this trial; do not attribute results to the old profile.")
+    if trial_row:
+        trial = json.loads(trial_row[0])
+        if trial["profile"]["configuration"].get("execution") != execution:
+            raise HarnessError("This trial requires its bound execution supervisor; do not submit manual checks.")
+        if trial["profile"]["id"] != profile(load_config(store.home), execution)["id"]:
+            raise HarnessError("Model/prompt profile changed during this trial; do not attribute results to the old profile.")
     before = inspect(store.root, required=True)
     assert before is not None
-    changed_graders = [
-        path for path, expected in command["protected"].items()
-        if not (store.root / path).is_file()
-        or (store.root / path).is_symlink()
-        or (store.root / path).stat().st_size > 1024 * 1024
-        or hashlib.sha256((store.root / path).read_bytes()).hexdigest() != expected
-    ]
-    if changed_graders:
-        raise HarnessError("Trusted graders changed; review and explicitly reapprove the command/test baseline.")
-    outcome = execute(command["argv"], store.root, command["timeout"])
+    verify_graders(store.root, command)
+    if timeout_limit is not None and timeout_limit <= 0:
+        raise HarnessError("Supervised validation deadline reached; no check was started.")
+    timeout = min(command["timeout"], timeout_limit) if timeout_limit is not None else command["timeout"]
+    outcome = execute(command["argv"], store.root, timeout)
     after = inspect(store.root, required=True)
     assert after is not None
     success = (
@@ -243,7 +297,9 @@ def run_check(store: ProjectStore, name: str, task_id: str | None) -> dict[str, 
         "success": success, "protected_graders": bool(command["protected"]),
         "recorded_at": now(), **outcome,
     }
-    if trial_row and json.loads(trial_row[0])["profile"]["id"] != profile(load_config(store.home))["id"]:
+    if execution is not None:
+        result["execution"] = execution
+    if trial_row and json.loads(trial_row[0])["profile"]["id"] != profile(load_config(store.home), execution)["id"]:
         result["success"] = False
         result["profile_changed"] = True
     with store.connection() as database:
@@ -403,7 +459,8 @@ def report(store: ProjectStore) -> dict[str, Any]:
         "target": 0.95, "minimum_distinct_tasks": 100, "profiles": list(grouped.values()),
         "limitations": (
             "Not a correctness guarantee, test coverage, or model-generation pass@1. "
-            "External-agent internal retries/model choice and training-data contamination are not independently observed. "
+            "External-agent internal retries/model choice are not independently observed; supervised profiles "
+            "include observed engine/harness provenance and remain separate. Training-data contamination is unknown. "
             "Use independent representative tasks and review grader quality."
         ),
     }

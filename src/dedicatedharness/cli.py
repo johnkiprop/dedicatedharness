@@ -17,6 +17,7 @@ from httpx import HTTPError
 from .local import LocalClient, Result, local_url
 from .models import Hub
 from . import model_manager
+from . import profiles, supervisor
 from .project_cli import register as register_project_commands, run as run_project_command
 from .projects import ProjectStore, context_for, text
 from .quality_cli import register as register_quality_commands, run as run_quality_command
@@ -55,7 +56,7 @@ def query_options(parser: argparse.ArgumentParser) -> None:
 
 def parser_for_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="dh", description="Local-only model and prompt companion for Mac engineers."
+        prog="dh", description="Hardware-aware local models and bounded coding supervision for Mac engineers."
     )
     parser.add_argument("--home", type=Path, default=default_home())
     commands = parser.add_subparsers(dest="command", required=True)
@@ -88,6 +89,7 @@ def parser_for_cli() -> argparse.ArgumentParser:
     upgrade.add_argument("--stage", action="store_true", help="Download/verify without changing the active model")
     upgrade.add_argument("--yes", action="store_true")
     upgrade.add_argument("--keep-old", action="store_true")
+    upgrade.add_argument("--profile", help="With --stage, retain the candidate as a named evaluation profile")
 
     connect = commands.add_parser("connect", help="Connect to an existing local OpenAI-compatible API")
     connect.add_argument("--url", default="http://127.0.0.1:1234/v1")
@@ -125,6 +127,8 @@ def parser_for_cli() -> argparse.ArgumentParser:
     export.add_argument("--out", type=Path, help="Write a new file, refusing to overwrite")
     register_project_commands(commands)
     register_quality_commands(commands)
+    profiles.register(commands)
+    supervisor.register(commands)
     return parser
 
 
@@ -204,6 +208,12 @@ def setup(args: argparse.Namespace, home: Path) -> None:
 
 
 def upgrade(args: argparse.Namespace, home: Path) -> None:
+    profile_name = getattr(args, "profile", None)
+    if profile_name:
+        if not args.stage:
+            raise HarnessError("--profile requires --stage; named candidates are not automatic promotions.")
+        if profiles.profile_path(home, profile_name).exists():
+            raise HarnessError("That profile already exists; choose a new name before staging.")
     config = load_config(home)
     if config["backend"] != "mlx":
         raise HarnessError("Automatic upgrades manage only harness-owned MLX models, not LM Studio/external servers.")
@@ -221,14 +231,25 @@ def upgrade(args: argparse.Namespace, home: Path) -> None:
     if candidate.fit != "plausible" or candidate.license == "unknown":
         raise HarnessError("Candidate is not safely eligible for installation.")
     if candidate.repo == config.get("repo") and candidate.revision == config.get("revision"):
+        if profile_name:
+            raise HarnessError(
+                f"Candidate is already active; no staged profile was created. Use 'dh profile save {profile_name}'."
+            )
         print("Current model is the preferred eligible candidate; no files or configuration changed.")
         return
     if args.stage:
         confirm("Download and verify this staged model without changing the active model?", args.yes)
-        python, _ = prepare_runtime(home, False)
+        python, runtime_version = prepare_runtime(home, False)
         snapshot = hub.download(candidate).resolve()
         model_manager.record_owned(home, candidate, snapshot)
         model_manager.verify_model(python, snapshot)
+        if profile_name:
+            profiles.save_profile(home, profile_name, {
+                **config, "model": str(snapshot), "snapshot": str(snapshot),
+                "repo": candidate.repo, "revision": candidate.revision, "license": candidate.license,
+                "runtime_python": str(python), "runtime_version": runtime_version,
+            })
+            print(f"Candidate retained as '{profile_name}'; use 'dh profile use {profile_name}' for explicit evaluation.")
         print(
             "Candidate staged. Active model retained; no old model removed. "
             f"For explicit evaluation, use setup --repo {candidate.repo} "
@@ -263,6 +284,7 @@ def upgrade(args: argparse.Namespace, home: Path) -> None:
 
 def connect(args: argparse.Namespace, home: Path) -> None:
     validate_budgets(args.context, args.output)
+    model_manager.require_stopped(home)
     client = LocalClient(args.url)
     models = client.models()
     model = args.model
@@ -429,6 +451,18 @@ def export_config(config: dict[str, Any], target: str) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> None:
+    from contextlib import nullcontext
+    from .activity import activity_lock
+    mutating = (
+        args.command in ("setup", "upgrade", "connect", "check-tools")
+        or args.command == "profile" and args.profile_command != "list"
+        or args.command == "quality" and args.quality_command == "profile"
+    )
+    with activity_lock(args.home.expanduser().resolve()) if mutating else nullcontext():
+        _run(args)
+
+
+def _run(args: argparse.Namespace) -> None:
     home = args.home.expanduser().resolve()
     if args.command == "doctor":
         hardware = detect_hardware(home / "hub")
@@ -516,6 +550,10 @@ def run(args: argparse.Namespace) -> None:
         run_project_command(args, home)
     elif args.command == "quality":
         run_quality_command(args, home)
+    elif args.command == "profile":
+        profiles.run(args, home)
+    elif args.command in ("run", "runs"):
+        supervisor.run(args, home)
     else:
         config = load_config(home)
         if args.command == "serve":

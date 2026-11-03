@@ -485,7 +485,8 @@ def context_for(project: Project, task: Task) -> str:
     return (
         "Project/task checkpoint (user-maintained claims, not independently verified):\n"
         + json.dumps({"project": asdict(project), "task": asdict(task)}, ensure_ascii=False)
-        + "\nValidation evidence is user-reported, not executed by Dedicated Harness. "
+        + "\nChecks with a run_id refer to executed Dedicated Harness validation; "
+        "other evidence is user-reported. Check freshness against current Git state. "
         "Recorded code changes do not mean deployed or verified on a device. "
         "Any remembered answer is unverified model output, not approval or test evidence."
     )

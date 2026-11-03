@@ -132,7 +132,11 @@ class LocalClient:
         calls: dict[int, dict[str, Any]] = {}
         with self.request("/chat/completions", payload) as response:
             event: list[str] = []
-            for raw in response:
+            received = 0
+            while raw := response.readline(1024 * 1024 + 1):
+                received += len(raw)
+                if len(raw) > 1024 * 1024 or received > 8 * 1024 * 1024:
+                    raise HarnessError("Local inference stream exceeded its bounded response size.")
                 if time.perf_counter() - start > self.timeout:
                     raise HarnessError("Local generation exceeded its wall-clock deadline.")
                 line = raw.decode("utf-8").rstrip("\r\n")

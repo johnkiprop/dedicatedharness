@@ -47,7 +47,7 @@ def register(commands: argparse._SubParsersAction) -> None:
     use = task_commands.add_parser("use", help="Resume a task without replaying its transcript")
     root_option(use)
     use.add_argument("task_id")
-    show_task = task_commands.add_parser("show", help="Show current state; validation is user-reported")
+    show_task = task_commands.add_parser("show", help="Show current state and distinguish reported from executed evidence")
     root_option(show_task, task_id=True)
 
     checkpoint = task_commands.add_parser("checkpoint", help="Replace selected compact state sections")

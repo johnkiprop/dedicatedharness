@@ -47,7 +47,7 @@ def selected_files(info: Any) -> list[Any]:
 
 def assess(
     info: Any, config: dict[str, Any], tokenizer: dict[str, Any],
-    hardware: Hardware, context: int,
+    hardware: Hardware, context: int, *, cached: bool = False,
 ) -> Candidate:
     if context <= 0:
         raise HarnessError("Context must be positive.")
@@ -124,7 +124,7 @@ def assess(
             reasons.append("Insufficient immediately free memory; close apps and retry.")
         else:
             fit = "plausible"
-    if download_bytes + 2 * GIB > hardware.disk_free_bytes:
+    if not cached and download_bytes + 2 * GIB > hardware.disk_free_bytes:
         fit = "disk-full"
         reasons.append("Insufficient disk space, including 2 GiB staging reserve.")
     reasons.append("Conservative estimate, not measured peak memory or speed.")
