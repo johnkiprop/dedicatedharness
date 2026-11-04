@@ -108,6 +108,17 @@ Read installed memory, architecture, macOS version, current memory pressure,
 and free space on the actual cache volume. Detect translated processes where
 possible. Chip family alone is not enough.
 
+On macOS, low free memory alone does not imply an unusable machine: inactive
+pages can be reclaimed. Estimate availability from `vm_stat` free, speculative,
+and inactive pages. Apple's command subtracts speculative pages from its printed
+free count, so they must be restored once. Do not separately add purgeable or
+file-backed totals, which overlap resident page categories. This corresponds
+to the free + inactive Mach-counter estimate used by psutil; it is not a
+guaranteed allocation or a measured peak. Keep the existing model/KV/scratch
+and OS/apps reserves, and reject insufficient estimated headroom:
+https://github.com/apple-oss-distributions/system_cmds/blob/main/vm_stat/vm_stat.c
+https://github.com/giampaolo/psutil/blob/master/psutil/arch/osx/mem.c
+
 Start with one loaded model and a modest context budget, then measure.
 Do not modify kernel wired-memory limits, enable swap tricks, or promise
 tokens/second from RAM size. Show separate memory-fit and performance status.

@@ -94,6 +94,8 @@ class ModelTests(unittest.TestCase):
     def test_current_memory_pressure_blocks_install(self):
         candidate = self.candidate(machine=hardware(available_bytes=2 * GIB))
         self.assertEqual(candidate.fit, "memory-pressure")
+        self.assertIn("available memory 2.00 GiB", " ".join(candidate.reasons))
+        self.assertIn("working-set estimate 5.56 GiB", " ".join(candidate.reasons))
 
     def test_unknown_ram_is_uncertain(self):
         candidate = self.candidate(machine=hardware(memory_bytes=None, available_bytes=None))
@@ -192,6 +194,26 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(listing.call_args.kwargs["pipeline_tag"], "text-generation")
         self.assertEqual(listing.call_args.kwargs["limit"], 8)
 
+    def test_recommendation_failure_explains_memory_and_candidate_status(self):
+        machine = hardware(available_bytes=2 * GIB)
+        candidate = self.candidate(machine=machine)
+        hub = Hub(Path("cache"))
+        with patch.object(hub, "discover", return_value=[candidate]), self.assertRaises(
+            HarnessError
+        ) as raised:
+            hub.recommend("coding", machine, 4096)
+        message = str(raised.exception)
+        self.assertIn("Screened candidates: 1 (memory-pressure=1)", message)
+        self.assertIn("available memory: 2.00 GiB", message)
+        self.assertIn("dh models --repo OWNER/MODEL", message)
+
+    def test_empty_discovery_is_an_explicit_failure(self):
+        hub = Hub(Path("cache"))
+        with patch.object(hub, "discover", return_value=[]), self.assertRaisesRegex(
+            HarnessError, r"Screened candidates: 0 \(none\)"
+        ):
+            hub.recommend("coding", hardware(), 4096)
+
 
 class ContextTests(unittest.TestCase):
     def test_task_brief_has_checkable_fields_without_inference(self):
@@ -272,14 +294,63 @@ class SystemTests(unittest.TestCase):
         ), patch("dedicatedharness.system.command_output", side_effect=[
             str(24 * GIB), "Apple M5",
             "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
-            "Pages free: 100.\nPages speculative: 20.\n",
+            "Pages free: 100.\nPages speculative: 20.\nPages inactive: 300.\n",
         ]), patch("dedicatedharness.system.subprocess.run", return_value=SimpleNamespace(
             stdout="0\n"
         )):
             result = detect_hardware(Path(temporary))
         self.assertEqual(result.memory_bytes, 24 * GIB)
-        self.assertEqual(result.available_bytes, 120 * 16384)
+        self.assertEqual(result.available_bytes, 420 * 16384)
         self.assertTrue(result.apple_silicon)
+
+    def test_low_free_memory_can_fit_using_inactive_pages_without_double_counting(self):
+        for page_size in (4096, 16384):
+            with self.subTest(page_size=page_size), tempfile.TemporaryDirectory() as temporary, patch(
+                "dedicatedharness.system.platform.system", return_value="Darwin"
+            ), patch("dedicatedharness.system.platform.machine", return_value="arm64"), patch(
+                "dedicatedharness.system.platform.mac_ver", return_value=("27.0", "", "")
+            ), patch("dedicatedharness.system.command_output", side_effect=[
+                str(24 * GIB), "Apple M5 Pro",
+                f"Mach Virtual Memory Statistics: (page size of {page_size} bytes)\n"
+                "Pages free: 9000.\nPages speculative: 641.\n"
+                f"Pages inactive: {9 * GIB // page_size}.\n"
+                "Pages active: 200000.\nPages wired down: 220000.\n"
+                "Pages purgeable: 150000.\nFile-backed pages: 400000.\n"
+                "Pages occupied by compressor: 210000.\n",
+            ]), patch("dedicatedharness.system.subprocess.run", return_value=SimpleNamespace(
+                stdout="0\n"
+            )):
+                machine = detect_hardware(Path(temporary))
+            self.assertEqual(machine.available_bytes, 9641 * page_size + 9 * GIB)
+            self.assertIn("inactive", " ".join(machine.notes))
+            candidate = assess(
+                model_info(), model_config(), {"chat_template": "{{ tools }} tool_call"},
+                machine, 4096,
+            )
+            self.assertEqual(candidate.fit, "plausible")
+
+    def test_no_inactive_memory_still_blocks_an_oversized_working_set(self):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "dedicatedharness.system.platform.system", return_value="Darwin"
+        ), patch("dedicatedharness.system.command_output", side_effect=[
+            str(24 * GIB), "Apple M5 Pro",
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+            "Pages free: 9000.\nPages speculative: 641.\nPages inactive: 0.\n",
+        ]), patch("dedicatedharness.system.subprocess.run", return_value=SimpleNamespace(stdout="0\n")):
+            machine = detect_hardware(Path(temporary))
+        self.assertEqual(machine.available_bytes, 157958144)
+        self.assertEqual(assess(model_info(), model_config(), {"chat_template": "test"},
+                                machine, 4096).fit, "memory-pressure")
+
+    def test_unrecognized_memory_stats_are_reported_not_invented(self):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "dedicatedharness.system.platform.system", return_value="Darwin"
+        ), patch("dedicatedharness.system.command_output", side_effect=[
+            str(24 * GIB), "Apple M5 Pro", "unexpected vm_stat output",
+        ]), patch("dedicatedharness.system.subprocess.run", return_value=SimpleNamespace(stdout="0\n")):
+            machine = detect_hardware(Path(temporary))
+        self.assertIsNone(machine.available_bytes)
+        self.assertIn("Available memory unavailable", " ".join(machine.notes))
 
     def test_config_persistent_atomic_and_no_overwrite_exports(self):
         with tempfile.TemporaryDirectory() as temporary:

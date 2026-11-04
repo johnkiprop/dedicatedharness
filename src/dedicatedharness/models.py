@@ -110,7 +110,8 @@ def assess(
     elif sizes_known and kv_bytes is not None and hardware.memory_bytes is not None:
         reserve = max(6 * GIB, int(hardware.memory_bytes * 0.25))
         scratch = max(2 * GIB, int(weight_bytes * 0.15))
-        required = weight_bytes + kv_bytes + scratch + reserve
+        working_set = weight_bytes + kv_bytes + scratch
+        required = working_set + reserve
         if limit is None:
             fit = "uncertain"
         elif context > limit or required > hardware.memory_bytes:
@@ -119,9 +120,13 @@ def assess(
         elif hardware.available_bytes is None:
             fit = "plausible"
             reasons.append("Current available memory unknown; fit is not guaranteed.")
-        elif weight_bytes + kv_bytes + scratch > hardware.available_bytes:
+        elif working_set > hardware.available_bytes:
             fit = "memory-pressure"
-            reasons.append("Insufficient immediately free memory; close apps and retry.")
+            reasons.append(
+                f"Estimated available memory {hardware.available_bytes / GIB:.2f} GiB "
+                f"is below the model working-set estimate {working_set / GIB:.2f} GiB "
+                "(weights + context + scratch); unload other models/close apps and retry."
+            )
         else:
             fit = "plausible"
     if not cached and download_bytes + 2 * GIB > hardware.disk_free_bytes:
@@ -221,7 +226,20 @@ class Hub:
             and (purpose != "coding" or item.has_tool_template)
         ]
         if not eligible:
-            raise HarnessError("No compatible, safely budgeted recommendation. Inspect 'dh models' reasons.")
+            fits = ", ".join(
+                f"{fit}={sum(item.fit == fit for item in candidates.values())}"
+                for fit in sorted({item.fit for item in candidates.values()})
+            )
+            available = (
+                f" Estimated available memory: {hardware.available_bytes / GIB:.2f} GiB."
+                if hardware.available_bytes is not None else ""
+            )
+            raise HarnessError(
+                "No compatible, safely budgeted recommendation. "
+                f"Screened candidates: {len(candidates)} ({fits or 'none'}).{available} "
+                "Candidates also need a declared license and, for coding, a tool template. "
+                "Inspect 'dh models --repo OWNER/MODEL' for detailed fit reasons."
+            )
 
         def rank(candidate: Candidate) -> tuple:
             evidence = measured.get(candidate.repo + "@" + candidate.revision, {})

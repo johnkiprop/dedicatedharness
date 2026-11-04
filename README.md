@@ -61,7 +61,8 @@ dh setup --purpose coding --install-runtime
 dh serve
 ```
 
-Setup displays the license, immutable revision, download size, fit reasoning,
+Run `dh serve` only after setup succeeds. Setup displays the license,
+immutable revision, download size, fit reasoning,
 and isolated-runtime action before asking permission. It downloads the pinned
 revision and verifies offline loading plus short generation before saving the
 active configuration. `--yes` explicitly
@@ -89,7 +90,7 @@ Live metadata screening during development found the 4B baseline and
 `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` plausible under a hypothetical
 24 GiB / 4,096-token budget. The latter is a coding baseline, not a proven
 quality winner. `Qwen3-Coder-30B-A3B-Instruct-4bit` exceeded that conservative
-budget despite only 3B active parameters. Current free memory on your Mac
+budget despite only 3B active parameters. Estimated available memory on your Mac
 must still be checked before either smaller model is installed.
 
 Only a conservative initial text-only architecture set is eligible:
@@ -559,8 +560,10 @@ The initial conventional-attention budget uses:
 - Actual selected artifact sizes and full resident weights, including MoE experts.
 - Full requested context with fp16/bf16 K/V for one sequence, independent of weight bits.
 - Scratch reserve of at least 2 GiB and OS/apps reserve of at least 6 GiB / 25% RAM.
-- Immediately free/speculative Mac pages, excluding reclaimable pages, as a
-  deliberately conservative current-availability check.
+- Estimated available Mac memory from free + speculative + inactive pages.
+  Inactive pages may need reclamation; purgeable/file-backed totals overlap
+  other categories and are not added again. Active/wired/compressed pages
+  and swap are excluded.
 - Full download size plus 2 GiB disk reserve, even when some files are cached.
 
 These are screening estimates, not measured peak usage. Close other memory-heavy

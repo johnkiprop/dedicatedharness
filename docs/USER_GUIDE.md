@@ -1,6 +1,6 @@
 # Dedicated Harness User Guide
 
-Version 0.1.0 | Updated 30 October 2026
+Version 0.1.0 | Updated 3 November 2026
 
 This guide covers the current CLI. Commands use the Mac Terminal.
 The Word edition, `USER_GUIDE.docx`, contains the same guide.
@@ -93,7 +93,8 @@ dh setup --repo mlx-community/Qwen3-4B-Instruct-2507-4bit \
 ```
 
 Do not run both setup examples in sequence unnecessarily. Stop `dh serve`
-before another setup, staging operation, or upgrade. It runs in the foreground;
+before another setup, staging operation, or upgrade. Run `dh serve` only after
+setup succeeds. It runs in the foreground;
 use Control-C to stop it. The CLI will not kill an existing model server.
 
 In a second activated terminal:
@@ -384,6 +385,7 @@ There is no background upgrade watcher.
 | --- | --- |
 | `dh` is not found | Activate the harness environment in this terminal. |
 | No compatible recommendation | Inspect `dh models` reasons. Close heavy apps or select a smaller supported model. Do not bypass the budget. |
+| Very low available memory on a 24 GB Mac | Update the harness and run `dh doctor`. Availability estimates free + speculative + inactive pages, not just free pages; inactive pages may need reclamation. If still insufficient, unload LM Studio/other models and close heavy apps. |
 | Endpoint unavailable | Start `dh serve`, or start/load LM Studio for an external connection. |
 | Setup says a listener is active | Stop that server yourself. The harness will not kill it. |
 | Prompt exceeds context | Select fewer files or smaller ranges. Reserve output space. |

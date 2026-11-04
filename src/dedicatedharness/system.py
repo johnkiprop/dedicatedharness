@@ -71,15 +71,21 @@ def detect_hardware(cache: Path) -> Hardware:
             vm = command_output(["vm_stat"])
             page_match = re.search(r"page size of (\d+) bytes", vm)
             counts = dict(re.findall(r"^(Pages [\w ]+):\s+(\d+)\.", vm, re.MULTILINE))
-            if not page_match or "Pages free" not in counts:
+            if not page_match or any(
+                key not in counts
+                for key in ("Pages free", "Pages speculative", "Pages inactive")
+            ):
                 raise ValueError("unrecognized vm_stat output")
-            # Do not count inactive/compressed pages as immediately free.
+            # vm_stat subtracts speculative pages from "Pages free".
+            # Purgeable/file-backed totals overlap these categories; do not add them.
             available = int(page_match[1]) * (
-                int(counts["Pages free"]) + int(counts.get("Pages speculative", "0"))
+                int(counts["Pages free"]) + int(counts["Pages speculative"])
+                + int(counts["Pages inactive"])
             )
             notes.append(
-                "Available memory counts free/speculative pages only; "
-                "reclaimable memory is deliberately excluded."
+                "Available memory is estimated from free + speculative + inactive pages; "
+                "inactive pages may require reclamation. Purgeable/file-backed totals "
+                "are not added again. Active/wired/compressed pages and swap are excluded."
             )
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             notes.append(f"Available memory unavailable: {error}")
