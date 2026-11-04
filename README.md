@@ -197,6 +197,13 @@ admission uses a deliberately conservative UTF-8/JSON byte estimate plus
 template allowance. **That estimate is not a guaranteed bound or an exact
 token count for an unknown model.** The server must also enforce its limits.
 
+Managed counting explicitly requests a flat sequence of token IDs, not a
+Transformers encoding dictionary, and rejects unexpected shapes or invalid
+counts. Older builds could mistake the two fields of a newer Transformers
+encoding for two tokens. If a normal chat reports only two input tokens,
+update the harness and retry; do not increase budgets to work around it.
+Backend-reported usage is separate from local admission accounting.
+
 ## Design and implementation
 
 ### Supervised execution and trust boundaries

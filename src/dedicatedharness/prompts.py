@@ -74,8 +74,13 @@ def count_tokens(
             "d=json.load(sys.stdin); "
             "t=AutoTokenizer.from_pretrained(d['path'], local_files_only=True,"
             "trust_remote_code=False); "
-            "print(len(t.apply_chat_template(d['messages'], tokenize=True,"
-            "add_generation_prompt=True, tools=d['tools'])))"
+            "ids=t.apply_chat_template(d['messages'], tokenize=True,"
+            "add_generation_prompt=True, tools=d['tools'],"
+            "return_dict=False, return_tensors=None)\n"
+            "if not isinstance(ids, list) or not ids or "
+            "any(type(token) is not int or token < 0 for token in ids):\n"
+            "    raise ValueError('Expected a flat nonempty list of token IDs')\n"
+            "print(len(ids))"
         )
         response = subprocess.run(
             [str(python), "-c", script],
@@ -84,7 +89,13 @@ def count_tokens(
         )
         if response.returncode:
             raise HarnessError("Local tokenizer failed; inspect runtime/model compatibility.")
-        return int(response.stdout.strip()), "exact chat-template tokens"
+        try:
+            count = int(response.stdout.strip())
+        except ValueError as error:
+            raise HarnessError("Local tokenizer returned an invalid token count.") from error
+        if count <= 0:
+            raise HarnessError("Local tokenizer returned a non-positive token count.")
+        return count, "exact chat-template tokens"
     # Byte count is deliberately conservative for ordinary byte-based tokenizers,
     # but is not a universal bound on unknown templates or tokenizers.
     size = len(json.dumps(

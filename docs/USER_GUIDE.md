@@ -225,6 +225,18 @@ identifiers, errors, and meaningful code. Secrets are not automatically redacted
 Managed MLX uses real chat-template token counts; external-server counting is
 an explicitly approximate byte estimate.
 
+Managed counting requests flat token IDs explicitly so newer Transformers
+encoding dictionaries cannot be mistaken for token sequences. A normal chat
+reported as only two input tokens is a known older-build counting bug, not
+proof of cache efficiency. Update the harness's editable checkout with
+`git pull --ff-only` and start a new `dh ask` command. This counter fix does not
+require redownloading the model or restarting the already running model server.
+
+Name the intended domain explicitly: "LLMs running on my Mac for software
+development" is clearer than "local coding models." If an answer instead
+discusses locally connected image/speech networks, it misunderstood the task.
+A passing tool roundtrip checks protocol behavior, not factual accuracy.
+
 ## 6. Work on one project from investigation to completion
 
 This example assumes a Git-backed application with `src/auth.py` and a `tests`
@@ -427,6 +439,7 @@ There is no background upgrade watcher.
 | Problem | What to do |
 | --- | --- |
 | `dh` is not found | Activate the harness environment in this terminal. |
+| Managed input count is only two tokens for a normal chat | Update the harness and retry. Older code could count Transformers dictionary fields rather than token IDs; do not bypass admission or assume these are cached-token savings. |
 | No compatible recommendation | Inspect `dh models` reasons. Close heavy apps or select a smaller supported model. Do not bypass the budget. |
 | Very low available memory on a 24 GB Mac | Update the harness and run `dh doctor`. Availability estimates free + speculative + inactive pages, not just free pages; inactive pages may need reclamation. If still insufficient, unload LM Studio/other models and close heavy apps. |
 | Already have models in LM Studio | Reuse a loaded model via Option B's `dh connect`, or keep its files and unload it before managed MLX setup. The harness does not scan/deduplicate that library or delete its downloads. |

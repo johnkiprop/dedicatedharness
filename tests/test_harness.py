@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -274,6 +275,65 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(
             json.loads(run.call_args.kwargs["input"])["tools"], [{"type": "function"}]
         )
+
+    def test_mlx_helper_counts_token_ids_not_transformers_mapping_keys(self):
+        source = """
+class AutoTokenizer:
+    @classmethod
+    def from_pretrained(cls, path, **kwargs):
+        assert kwargs == {"local_files_only": True, "trust_remote_code": False}
+        return cls()
+
+    def apply_chat_template(self, messages, **kwargs):
+        assert messages[0]["role"] == "system"
+        assert kwargs["tokenize"] and kwargs["add_generation_prompt"]
+        ids = list(range(71 + (40 if kwargs.get("tools") else 0)))
+        if kwargs.get("return_dict", True):
+            return {"input_ids": ids, "attention_mask": [1] * len(ids)}
+        assert kwargs.get("return_tensors") is None
+        return ids
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / "transformers.py").write_text(source, encoding="utf-8")
+            config = configuration(backend="mlx", runtime_python=sys.executable, snapshot="snapshot")
+            with patch.dict(os.environ, {"PYTHONPATH": temporary}):
+                count, label = count_tokens(config, messages_for("test"))
+                with_tools, _ = count_tokens(config, messages_for("test"), [{"type": "function"}])
+                self.assertEqual(count, 71)
+                self.assertEqual(with_tools, 111)
+                self.assertIn("exact", label)
+                config.update(context_tokens=646, max_output=512)
+                admit(config, messages_for("test"), 511)
+                with self.assertRaisesRegex(HarnessError, "Nothing was sent"):
+                    admit(config, messages_for("test"), 512)
+
+    def test_mlx_helper_refuses_unexpected_token_shapes(self):
+        for value in (
+            {"input_ids": [1, 2], "attention_mask": [1, 1]},
+            [[1, 2]], "tokens", [], [True], [-1],
+        ):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                source = (
+                    "class AutoTokenizer:\n"
+                    "    @classmethod\n"
+                    "    def from_pretrained(cls, *args, **kwargs): return cls()\n"
+                    f"    def apply_chat_template(self, *args, **kwargs): return {value!r}\n"
+                )
+                (Path(temporary) / "transformers.py").write_text(source, encoding="utf-8")
+                config = configuration(backend="mlx", runtime_python=sys.executable, snapshot="snapshot")
+                with patch.dict(os.environ, {"PYTHONPATH": temporary}), self.assertRaisesRegex(
+                    HarnessError, "Local tokenizer failed"
+                ):
+                    count_tokens(config, messages_for("test"))
+
+    def test_mlx_refuses_invalid_subprocess_counts(self):
+        config = configuration(backend="mlx", runtime_python=__file__, snapshot="snapshot")
+        for output in ("", "not a count\n", "0\n", "-1\n"):
+            with self.subTest(output=output), patch(
+                "dedicatedharness.prompts.subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stdout=output),
+            ), self.assertRaisesRegex(HarnessError, "Local tokenizer"):
+                count_tokens(config, messages_for("test"))
 
 
 class SystemTests(unittest.TestCase):
