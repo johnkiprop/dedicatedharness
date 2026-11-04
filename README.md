@@ -16,6 +16,8 @@ quality checks, supervised coding, saved-model rollback, and troubleshooting.
 
 See [RESEARCH.md](RESEARCH.md) for the dated research, model caveats, architecture
 recommendations, and primary sources. Start with one bounded worker, not a swarm.
+The [design section](#design-and-implementation) diagrams model setup, supervised
+execution, and the acceptance boundary.
 
 ## Install on your Mac
 
@@ -158,11 +160,136 @@ context capacity to at least the declared budget. `connect` verifies model
 discovery, not generation speed or tool quality. Reconnecting clears any
 previous tool-verification result.
 
+### Existing LM Studio models: disk, memory, and selection
+
+| Model state | Disk space | Effect on managed model recommendations |
+| --- | --- | --- |
+| Downloaded but unloaded | Weights occupy their storage volume. | No model-weight RAM allocation just from being stored; LM Studio itself can still use memory. Files affect the harness's cache-volume free-space reading when that storage is shared. |
+| Loaded or serving in LM Studio | Downloaded files remain on disk. | Resident weights and runtime/context buffers can consume unified memory, reduce headroom, and disqualify larger candidates. |
+| Also downloaded by managed MLX setup | A separate copy or different model conversion may occupy the harness cache. | There is no automatic cross-application inventory, import, or deduplication. Having a model in LM Studio does not make it the harness's selected model. |
+
+Managed discovery uses Hugging Face metadata, hardware/context estimates,
+current estimated memory availability, and free space on the harness cache
+volume. It does **not** inspect your LM Studio model library. Managed weights
+live in `~/.dedicatedharness/hub`; cleanup is restricted to eligible
+manifest-owned revisions there, never LM Studio's downloads.
+
+To reuse a downloaded model without another harness-managed download, load it
+in LM Studio and use `dh connect` as above. That command connects to an existing
+server: it does not copy weights, install MLX, load/unload a model, or start/stop
+LM Studio. Stop any running managed `dh serve` before changing the connection.
+If you are still at the setup approval prompt and prefer this route, answer
+`n` instead of approving another download. These are alternative active
+connections, not two required servers.
+
+If choosing managed MLX, unload other local models first and rerun `dh doctor`
+and discovery/setup. Keeping downloaded files is fine; loading two runtimes
+unnecessarily can waste unified memory. Do not equate the reported
+`download_bytes` with `required_bytes`: the latter includes weights, full-context
+KV, scratch, and OS/apps reserves. It is a screening estimate, not the download
+size or a measured/all-at-once RAM allocation. Total RAM must cover that complete
+budget. When current availability is known, it must cover weights + KV + scratch;
+the OS/apps reserve is not charged against available memory a second time.
+
 For managed MLX, admission counts the downloaded model's real chat-template
 tokens in the isolated runtime, without remote code. For external servers,
 admission uses a deliberately conservative UTF-8/JSON byte estimate plus
 template allowance. **That estimate is not a guaranteed bound or an exact
 token count for an unknown model.** The server must also enforce its limits.
+
+## Design and implementation
+
+### Supervised execution and trust boundaries
+
+This diagram shows `dh run`, not an ordinary interactive OpenCode session.
+The model server must already be running: `dh serve` manages MLX, or you
+start/load LM Studio yourself.
+
+```mermaid
+flowchart LR
+    cli["dh run"] --> supervisor["Bounded supervisor"]
+    supervisor -->|"Owns headless REST sessions"| engine["OpenCode 1.x engine"]
+    engine -->|"Model requests"| gateway["Authenticated loopback gateway<br/>Admission, budgets, compaction, tool guards"]
+    gateway --> server["Selected local model server<br/>Managed MLX OR external LM Studio"]
+    engine -->|"Scoped file tools"| repo["Your Git checkout"]
+    supervisor -->|"Fixed approved commands"| checks["Independent tests, build, lint"]
+    checks -->|"Validate current candidate"| repo
+    supervisor --> state[("Private task DB and compact run records<br/>Outside your checkout")]
+```
+
+[`supervisor.py`](src/dedicatedharness/supervisor.py) owns the run and its
+budgets. [`agent_engine.py`](src/dedicatedharness/agent_engine.py) starts,
+checks, observes, and stops its isolated OpenCode server.
+[`agent_gateway.py`](src/dedicatedharness/agent_gateway.py) pins local routing
+and sampling, admits actual messages/tool schemas, compacts tool results, and
+checks generated file-tool arguments before releasing them to the engine.
+[`quality.py`](src/dedicatedharness/quality.py) executes approved checks;
+the model cannot execute self-generated shell commands or mark a check passed.
+
+This is runtime policy, **not an OS sandbox**: approved checks execute project
+code. `ask`, `bench`, and `check-tools` use admitted local requests directly,
+without an OpenCode worker. Exporting a provider configuration and opening
+normal OpenCode does not enable these supervisor guards. OpenClaw remains
+an export/handoff integration.
+
+### Managed model selection and lifecycle
+
+```mermaid
+flowchart TD
+    hub["Hugging Face metadata<br/>Bounded popular and recent discovery"] --> screen["Screen architecture, license, sizes,<br/>context, memory, disk, and tool template"]
+    hardware["Actual Mac hardware and current headroom<br/>Not the LM Studio download inventory"] --> screen
+    screen -->|"Ineligible"| reject["Explain rejection<br/>Leave active configuration unchanged"]
+    screen -->|"Eligible and user approves"| prepare["Prepare isolated MLX runtime<br/>Download pinned revision to owned cache"]
+    prepare --> verify["Offline model load and short generation"]
+    verify -->|"Failure"| reject
+    verify -->|"Successful setup"| active["Save active configuration<br/>Start separately with dh serve"]
+    verify -->|"Stage only"| staged["Retain verified candidate<br/>Keep current connection"]
+```
+
+[`models.py`](src/dedicatedharness/models.py) screens candidates;
+[`runtime.py`](src/dedicatedharness/runtime.py) manages the isolated MLX
+runtime/server; [`model_manager.py`](src/dedicatedharness/model_manager.py)
+tracks owned revisions and evidence-gated upgrades.
+[`profiles.py`](src/dedicatedharness/profiles.py) saves named configurations
+and revalidates retained models on activation. A staged candidate is not
+automatically promoted: use an eligible measured upgrade or an explicit
+reviewed switch. Saved-profile references retain rollback revisions.
+
+Discovery/upgrades run only when invoked, not in a background watcher.
+Recommendations without comparable evaluation evidence are provisional.
+An explicitly requested runtime installation/update can modify that isolated
+runtime even if later model verification fails; preserving the active
+configuration is not a rollback of every preparation side effect.
+
+### Task lifecycle and acceptance
+
+```mermaid
+flowchart TD
+    task["Investigate and select task context"] --> approval["Approve scope and trusted required checks"]
+    approval --> preflight{"Task, model, tools, Git,<br/>and limits valid?"}
+    preflight -->|"No"| blocked["Stop without acceptance<br/>Retain existing edits for review"]
+    preflight -->|"Yes"| edit["One OpenCode worker<br/>Edit only allowed paths"]
+    edit --> observe["Observe terminal and idle session"]
+    observe --> checks["Execute independent checks<br/>against the current candidate"]
+    checks -->|"Failed, with budget and progress"| repair["Compact failure evidence<br/>Fresh repair session"]
+    repair --> edit
+    checks -->|"No budget, stale results, or pending checks"| blocked
+    checks -->|"All required checks pass"| shutdown["Stop owned engine<br/>Verify final freshness and approval"]
+    shutdown -->|"Valid"| accepted["Accept task"]
+    shutdown -->|"Drift or shutdown failure"| blocked
+    edit -->|"No progress, timeout, or policy failure"| blocked
+```
+
+Acceptance is bound to the current Git fingerprint, approval, protected graders,
+check definitions, and model configuration, not the model's completion text.
+Repair budgets are shared, not reset for each attempt; the first failed checked
+candidate stays failed in evaluation reports even if a repair later succeeds.
+
+Private state is compact task/check evidence, not automatic full-chat memory.
+Resume starts a fresh engine session under matching scope/configuration and
+remaining limits. Raw owned-engine state is deleted by default;
+`--keep-trace` retains it explicitly but does not create searchable memory.
+Normal OpenCode session history is separate and is not automatically imported.
 
 ## Guided prompts and explicit context
 

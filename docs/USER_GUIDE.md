@@ -5,6 +5,8 @@ Version 0.1.0 | Updated 3 November 2026
 This guide covers the current CLI. Commands use the Mac Terminal.
 The Word edition, `USER_GUIDE.docx`, contains the same guide.
 The remaining-work section distinguishes proposals from shipped features.
+Implementation diagrams are in the README's
+[design section](../README.md#design-and-implementation).
 
 ## 1. What the harness does
 
@@ -124,6 +126,47 @@ These are alternative active configurations. A later `connect` or successful
 `setup` replaces the harness connection. Model downloads need internet;
 inference uses numeric loopback URLs with no hosted fallback. A separate local
 application could still proxy requests elsewhere, so review its settings.
+
+### Existing LM Studio downloads: what counts against your Mac
+
+| Model state | Storage and memory effect |
+| --- | --- |
+| Downloaded but unloaded | Uses disk space on its storage volume, not model-weight RAM merely because it is stored. The LM Studio application can still use memory. |
+| Loaded or running in LM Studio | Resident weights and runtime/context buffers can use unified memory, reduce available headroom, and cause larger managed candidates to be rejected. |
+| Also installed by managed MLX | May occupy another copy or a different conversion in the harness's separate cache. Files are not automatically shared across the applications. |
+
+The harness checks free space where its cache is stored. LM Studio downloads
+on that volume, or another APFS volume sharing its storage pool, can reduce the
+reading; an independent external disk normally does not consume that space.
+On macOS, memory availability is estimated from free, speculative, and inactive
+pages, not installed RAM alone.
+Inactive pages may need reclamation. Unload other local models before managed
+discovery/setup if you want to free their memory; deleting downloaded files is
+not necessary just to unload a model.
+
+Managed recommendations inspect Hugging Face candidates, not your LM Studio
+library. They do not automatically select, import, or deduplicate its models.
+Managed MLX expects supported MLX artifacts; a GGUF download is not an
+interchangeable MLX snapshot. The default managed cache is
+`~/.dedicatedharness/hub`, and automatic cleanup never deletes LM Studio's
+downloads.
+
+To reuse existing weights without a harness-managed download, choose Option B:
+load a model in LM Studio, start its local server, and run the `dh connect`
+example above. It connects to that server; it does not copy weights, install
+MLX, load/unload models, or start/stop LM Studio. Stop any managed `dh serve`
+before changing the active connection. If still at the setup approval prompt,
+answer `n` to decline the managed download before taking this alternative.
+You do not need both model servers running.
+
+In setup output, `download_bytes` estimates selected artifact storage, whereas
+`required_bytes` budgets model weights, full-context KV, scratch, and OS/apps
+reserves. The latter is not the download size, an actual memory measurement,
+or an allocation of that entire amount at once. Total RAM must cover this
+complete budget; when current availability is known, it must cover weights +
+KV + scratch. The OS/apps reserve is not charged against available memory a
+second time. A plausible fit still needs real generation, tool checks, and
+task evaluation.
 
 ## 4. Connect OpenCode or OpenClaw
 
@@ -386,6 +429,7 @@ There is no background upgrade watcher.
 | `dh` is not found | Activate the harness environment in this terminal. |
 | No compatible recommendation | Inspect `dh models` reasons. Close heavy apps or select a smaller supported model. Do not bypass the budget. |
 | Very low available memory on a 24 GB Mac | Update the harness and run `dh doctor`. Availability estimates free + speculative + inactive pages, not just free pages; inactive pages may need reclamation. If still insufficient, unload LM Studio/other models and close heavy apps. |
+| Already have models in LM Studio | Reuse a loaded model via Option B's `dh connect`, or keep its files and unload it before managed MLX setup. The harness does not scan/deduplicate that library or delete its downloads. |
 | Endpoint unavailable | Start `dh serve`, or start/load LM Studio for an external connection. |
 | Setup says a listener is active | Stop that server yourself. The harness will not kill it. |
 | Prompt exceeds context | Select fewer files or smaller ranges. Reserve output space. |
